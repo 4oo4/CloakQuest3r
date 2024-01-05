@@ -3,6 +3,7 @@ import sys
 import ssl
 import os
 import requests
+import json
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from colorama import init, Fore
@@ -100,6 +101,28 @@ def get_ssl_certificate_info(host):
         print(f"{Fore.RED}Error extracting SSL certificate information: {e}{Fore.RESET}")
         return None
 
+def find_subdomains_with_cert_transparency(domain, timeout=20):
+    try:
+        crtsh_base_url = f"https://crt.sh/?q={domain}&output=json"
+        crtsh_resp = requests.get(crtsh_base_url, timeout=timeout).content.decode('utf-8')
+        try:
+            crtsh_data = json.loads(crtsh_resp)
+        except ValueError:
+            print(f"{Fore.YELLOW}Error retrieving Certificate Transparency data from crt.sh for {domain}{Fore.RESET}")
+    except (requests.exceptions.RequestException, requests.exceptions.ConnectionError):
+        pass
+    crtsh_subdomains = []
+    for cert in crtsh_data:
+        subdomain = cert['common_name']
+        issuer = cert['issuer_name']
+        san_names = cert['name_value'].split('\n')
+        crtsh_subdomains.append(subdomain)
+        for san_name in san_names:
+            crtsh_subdomains.append(san_name)
+    crtsh_subdomains = list(set(crtsh_subdomains))
+
+    return crtsh_subdomains
+
 def find_subdomains_with_ssl_analysis(domain, filename, timeout=20):
     #if not is_using_cloudflare(domain):
         #print(f"{C}Website is not using Cloudflare. Subdomain scan is not needed.{W}")
@@ -108,6 +131,9 @@ def find_subdomains_with_ssl_analysis(domain, filename, timeout=20):
     subdomains_found = []
     subdomains_lock = threading.Lock()
 
+    crtsh_subdomains = find_subdomains_with_cert_transparency(domain)
+    if crtsh_subdomains:
+        subdomains_found += crtsh_subdomains
     # subdomain scanning...
 
     def check_subdomain(subdomain):
@@ -267,6 +293,7 @@ if __name__ == "__main__":
         securitytrails_historical_ip_address(domain)
         print(f"\n{Fore.GREEN}[+] {Fore.YELLOW}Scanning for subdomains.{Fore.RESET}")
         find_subdomains_with_ssl_analysis(domain, filename)
+        find_subdomains_with_cert_transparency(domain)
 
     else:
         print(f"{Fore.RED}- Website is not using Cloudflare.")
